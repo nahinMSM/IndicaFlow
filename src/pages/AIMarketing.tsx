@@ -48,7 +48,7 @@ const Input = styled.input`
   }
 `;
 
-const Button = styled.button<{ $variant?: 'primary' | 'whatsapp' | 'success' }>`
+const Button = styled.button<{ $variant?: 'primary' | 'whatsapp' | 'success' | 'danger' }>`
   padding: 12px 24px;
   border: none;
   border-radius: 6px;
@@ -58,6 +58,7 @@ const Button = styled.button<{ $variant?: 'primary' | 'whatsapp' | 'success' }>`
     switch (props.$variant) {
       case 'whatsapp': return '#25D366';
       case 'success': return '#48bb78';
+      case 'danger': return '#f56565';
       default: return 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
     }
   }};
@@ -145,6 +146,32 @@ const ExampleText = styled.p`
   font-style: italic;
 `;
 
+const ButtonGroup = styled.div`
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  align-items: center;
+`;
+
+const StatusText = styled.span<{ $isRecording?: boolean }>`
+  color: ${props => (props.$isRecording ? '#f56565' : '#666')};
+  font-size: 14px;
+  margin-left: 8px;
+  font-weight: ${props => (props.$isRecording ? '600' : '400')};
+  animation: ${props => (props.$isRecording ? 'pulse 1s infinite' : 'none')};
+
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.3;
+    }
+  }
+`;
+
 // 🔥 Componente de TextArea com auto-resize
 const AutoResizeTextArea: React.FC<{
   value: string;
@@ -206,7 +233,7 @@ const AutoResizeTextArea: React.FC<{
         background: readOnly ? 'white' : 'transparent',
         marginBottom: '12px',
         boxSizing: 'border-box',
-        fontFamily: 'inherit'
+        fontFamily: 'inherit',
       }}
     />
   );
@@ -218,6 +245,13 @@ const generateWhatsAppLink = (telefone: string, mensagem: string) => {
   return `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(mensagem)}`;
 };
 
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
+
 const AIMarketing: React.FC = () => {
   const { user } = useAuth();
   const [prompt, setPrompt] = useState('');
@@ -226,6 +260,166 @@ const AIMarketing: React.FC = () => {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [enviarParaTodos, setEnviarParaTodos] = useState(false);
 
+  const [isRecording, setIsRecording] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  // 🔥 Converter voz em texto (Speech to Text)
+  const startVoiceRecognition = () => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      toast.error('Seu navegador não suporta reconhecimento de voz. Use Chrome ou Edge.');
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+
+    recognition.lang = 'pt-BR';
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 3;
+
+    let speechDetected = false;
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+      toast.success('🎤 Ouvindo... Fale agora!', { duration: 5000 });
+
+      setTimeout(() => {
+        if (isRecording && !speechDetected) {
+          recognition.stop();
+          toast('⏳ Nenhuma fala detectada. Tente falar mais alto.', {
+            icon: '🎤',
+            duration: 3000,
+          });
+        }
+      }, 5000);
+    };
+
+    recognition.onaudiostart = () => {
+      speechDetected = true;
+    };
+
+    recognition.onresult = (event: any) => {
+      speechDetected = true;
+
+      const transcript = Array.from(event.results)
+        .map((result: any) => result[0].transcript.trim())
+        .filter((text: string) => text.length > 0)
+        .join(' ');
+
+      const formattedText = transcript.charAt(0).toUpperCase() + transcript.slice(1);
+      setPrompt(formattedText);
+    };
+
+    recognition.onerror = (event: any) => {
+      setIsRecording(false);
+
+      switch (event.error) {
+        case 'no-speech':
+          toast('🎤 Nenhuma fala detectada. Clique em "Falar Prompt" e fale imediatamente.', {
+            icon: '💡',
+            duration: 4000,
+          });
+          break;
+        case 'not-allowed':
+          toast.error('❌ Permita o acesso ao microfone nas configurações do navegador.');
+          break;
+        case 'audio-capture':
+          toast.error('❌ Nenhum microfone encontrado. Conecte um microfone.');
+          break;
+        case 'network':
+          toast.error('❌ Erro de rede. Verifique sua conexão.');
+          break;
+        default:
+          toast.error(`❌ Erro: ${event.error}`);
+      }
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+      if (prompt.trim()) {
+        toast.success('✅ Prompt reconhecido!');
+      }
+    };
+
+    recognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+    } catch (error) {
+      toast.error('Erro ao acessar o microfone. Tente recarregar a página.');
+    }
+  };
+
+  const stopVoiceRecognition = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsRecording(false);
+      toast('🎤 Reconhecimento interrompido', { icon: '🎤', duration: 3000 });
+    }
+  };
+
+  // 🔥 Ler texto em voz alta (Text-to-Speech)
+  const textToSpeech = () => {
+    if (!post?.text) {
+      toast.error('Gere um texto primeiro');
+      return;
+    }
+
+    if (!('speechSynthesis' in window)) {
+      toast.error('Seu navegador não suporta síntese de voz.');
+      return;
+    }
+
+    if (isPlaying) {
+      window.speechSynthesis.cancel();
+      setIsPlaying(false);
+      toast('🔇 Leitura pausada', { icon: '🔇', duration: 3000 });
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(post.text);
+    utterance.lang = 'pt-BR';
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+
+    const voices = window.speechSynthesis.getVoices();
+    const portugueseVoice = voices.find(
+      (voice) => voice.lang.includes('pt') || voice.lang.includes('PT')
+    );
+    if (portugueseVoice) {
+      utterance.voice = portugueseVoice;
+    }
+
+    utterance.onstart = () => {
+      setIsPlaying(true);
+      toast('🔊 Lendo...');
+    };
+
+    utterance.onend = () => {
+      setIsPlaying(false);
+      toast.success('🔊 Leitura finalizada!');
+    };
+
+    utterance.onerror = () => {
+      setIsPlaying(false);
+      toast.error('Erro ao ler o texto');
+    };
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const stopTextToSpeech = () => {
+    if (isPlaying) {
+      window.speechSynthesis.cancel();
+      setIsPlaying(false);
+      toast('🔇 Leitura interrompida', { icon: '🔇', duration: 3000 });
+    }
+  };
+
+  // 🔥 Gerar conteúdo com IA
   const handleGeneratePost = async () => {
     if (!prompt.trim()) {
       toast.error('Descreva o que você quer gerar');
@@ -283,7 +477,7 @@ const AIMarketing: React.FC = () => {
     if (enviarParaTodos) {
       toast('Função "Enviar para todos" será implementada em breve!', {
         icon: '🚀',
-        duration: 3000
+        duration: 3000,
       });
       return;
     }
@@ -304,7 +498,7 @@ const AIMarketing: React.FC = () => {
         prompt: prompt,
         message: post.text,
         imageURL: post.imageURL || null,
-        createdAt: new Date()
+        createdAt: new Date(),
       });
       toast.success('Campanha salva no histórico!');
     } catch (error) {
@@ -320,6 +514,8 @@ const AIMarketing: React.FC = () => {
         <h3>📝 Descreva o que você quer gerar</h3>
         <p style={{ color: '#666', marginBottom: 12 }}>
           Seja detalhado! Quanto mais específico você for, melhor será o resultado.
+          <br />
+          <small>Usa Groq (texto) + Pollinations (imagem) - 100% gratuito!</small>
         </p>
 
         <Examples>
@@ -344,17 +540,32 @@ const AIMarketing: React.FC = () => {
 
         <Label htmlFor="prompt">✏️ Seu prompt *</Label>
 
+        <ButtonGroup>
+          <Button
+            $variant={isRecording ? 'danger' : 'primary'}
+            onClick={isRecording ? stopVoiceRecognition : startVoiceRecognition}
+          >
+            {isRecording ? '⏹️ Parar Gravação' : '🎤 Falar Prompt'}
+          </Button>
+          <StatusText $isRecording={isRecording}>
+            {isRecording ? '🔴 Gravando...' : 'Clique para falar'}
+          </StatusText>
+        </ButtonGroup>
+
         <AutoResizeTextArea
           id="prompt"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Descreva detalhadamente o que você quer que a IA gere..."
+          placeholder="Descreva detalhadamente o que você quer que a IA gere... (ou clique em Falar Prompt)"
           rows={3}
         />
 
         <Hint>
-          💡 Inclua: tipo de mensagem (WhatsApp/Instagram/Facebook), tom (romântico/profissional/divertido),
-          público-alvo, oferta, prazo, emojis, e qualquer outra instrução específica.
+          💡 Inclua: tipo de mensagem (WhatsApp/Instagram/Facebook), tom
+          (romântico/profissional/divertido), público-alvo, oferta, prazo, emojis, e qualquer outra
+          instrução específica.
+          <br />
+          🎤 Você também pode falar o prompt clicando no botão acima!
         </Hint>
 
         <Grid>
@@ -370,15 +581,28 @@ const AIMarketing: React.FC = () => {
       {post && (
         <Card>
           <h3>📝 Resultado</h3>
+
+          <ButtonGroup>
+            <Button
+              $variant={isPlaying ? 'danger' : 'success'}
+              onClick={isPlaying ? stopTextToSpeech : textToSpeech}
+            >
+              {isPlaying ? '🔇 Parar Leitura' : '🔊 Ouvir Resultado'}
+            </Button>
+            <StatusText>{isPlaying ? '🔊 Lendo...' : 'Clique para ouvir'}</StatusText>
+          </ButtonGroup>
+
           <Result>
             <AutoResizeTextArea
               value={post.text}
-              onChange={() => { }} // readOnly
+              onChange={() => { }}
               readOnly={true}
               placeholder="O resultado aparecerá aqui..."
               rows={2}
             />
-            <CopyButton $variant="primary" onClick={copyToClipboard}>📋 Copiar Texto</CopyButton>
+            <CopyButton $variant="primary" onClick={copyToClipboard}>
+              📋 Copiar Texto
+            </CopyButton>
           </Result>
 
           {post.imageURL && (
@@ -425,7 +649,8 @@ const AIMarketing: React.FC = () => {
             </EnvioSection>
 
             <p style={{ color: '#888', fontSize: 12, marginTop: 8 }}>
-              💡 O link do WhatsApp abrirá o app com a mensagem pré-preenchida. Você só precisa clicar em enviar.
+              💡 O link do WhatsApp abrirá o app com a mensagem pré-preenchida. Você só precisa clicar
+              em enviar.
             </p>
           </div>
         </Card>
@@ -434,8 +659,12 @@ const AIMarketing: React.FC = () => {
       <Card>
         <h3>📊 Como enviar mensagens em massa?</h3>
         <ul style={{ color: '#666', lineHeight: 1.8, paddingLeft: 20 }}>
-          <li><strong>Grátis:</strong> Copie a mensagem e cole manualmente no WhatsApp/Instagram</li>
-          <li><strong>Link direto:</strong> Use o botão acima para abrir o WhatsApp com a mensagem pronta</li>
+          <li>
+            <strong>Grátis:</strong> Copie a mensagem e cole manualmente no WhatsApp/Instagram
+          </li>
+          <li>
+            <strong>Link direto:</strong> Use o botão acima para abrir o WhatsApp com a mensagem pronta
+          </li>
         </ul>
       </Card>
     </Container>
